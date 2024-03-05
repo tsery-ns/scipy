@@ -4,7 +4,7 @@ import numpy as np
 from numpy.testing import assert_array_almost_equal, assert_array_equal, assert_allclose
 from pytest import raises as assert_raises
 from scipy.sparse.csgraph import (shortest_path, dijkstra, johnson,
-                                  bellman_ford, construct_dist_matrix,
+                                  bellman_ford, construct_dist_matrix, yen,
                                   NegativeCycleError)
 import scipy.sparse
 from scipy.io import mmread
@@ -29,6 +29,9 @@ directed_SP = [[0, 3, 3, 5, 7],
                [np.inf, np.inf, 0, np.inf, np.inf],
                [1, 4, 4, 0, 8],
                [2, 5, 5, 2, 0]]
+
+directed_2SP_0_to_3 = [[-9999, 0, -9999, 1, -9999],
+                       [-9999, 0, -9999, 4, 1]]
 
 directed_sparse_zero_G = scipy.sparse.csr_matrix(([0, 1, 2, 3, 1], 
                                             ([0, 1, 2, 3, 4], 
@@ -393,3 +396,56 @@ def test_sparse_matrices():
     assert_array_almost_equal(SP, shortest_path(G_csr))
     assert_array_almost_equal(SP, shortest_path(G_csc))
     assert_array_almost_equal(SP, shortest_path(G_lil))
+
+
+def test_yen_directed():
+    distances, predecessors = yen(
+                            directed_G,
+                            source=0,
+                            sink=3,
+                            K=2,
+                            return_predecessors=True
+                        )
+    assert_array_almost_equal(distances, [5., 9.])
+    assert_array_almost_equal(predecessors, directed_2SP_0_to_3)
+
+
+def test_yen_undirected():
+    distances = yen(
+        undirected_G,
+        source=0,
+        sink=3,
+        K=4,
+    )
+    assert_array_almost_equal(distances, [1., 4., 5., 8.])
+
+def test_yen_unweighted():
+    # Ask for more paths than there are, verify only the available paths are returned
+    distances, predecessors = yen(
+        directed_G,
+        source=0,
+        sink=3,
+        K=4,
+        unweighted=True,
+        return_predecessors=True,
+    )
+    assert_array_almost_equal(distances, [2., 3.])
+    assert_array_almost_equal(predecessors, directed_2SP_0_to_3)
+
+def test_yen_no_paths():
+    distances = yen(
+        directed_G,
+        source=2,
+        sink=3,
+        K=1,
+    )
+    assert distances.size == 0
+
+def test_yen_negative_weights():
+    distances = yen(
+        directed_negative_weighted_G,
+        source=2,
+        sink=0,
+        K=1,
+    )
+    assert_array_almost_equal(distances, [-2.])
