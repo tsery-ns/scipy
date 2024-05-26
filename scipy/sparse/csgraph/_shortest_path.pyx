@@ -71,7 +71,7 @@ def shortest_path(csgraph, method='auto',
                      The input csgraph will be converted to a dense representation.
 
            'D'    -- Dijkstra's algorithm with priority queue.
-                     Computational cost is approximately ``O[N(N*k + N*log(N))]``,
+                     Computational cost is approximately ``O[(N*k + N)*log(N)]``,
                      where ``k`` is the average number of connected edges per node.
                      The input csgraph will be converted to a csr representation.
 
