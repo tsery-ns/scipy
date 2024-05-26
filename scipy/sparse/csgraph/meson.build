@@ -38,7 +38,7 @@ foreach pyx_file: pyx_files_for_cpp
     cython_gen_csgraph_for_cpp.process(pyx_file[1]),
     cpp_args: cython_cpp_args,
     include_directories: inc_np,
-    dependencies: py3_dep,
+    dependencies: np_dep,
     install: true,
     subdir: 'scipy/sparse/csgraph',
   )
