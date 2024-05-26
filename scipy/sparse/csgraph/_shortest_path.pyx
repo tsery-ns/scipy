@@ -584,14 +584,10 @@ def dijkstra(csgraph, directed=True, indices=None,
         else:
             predecessor_matrix = np.empty((len(indices), N), dtype=ITYPE)
             predecessor_matrix.fill(NULL_IDX)
-            source_matrix = np.empty((len(indices), 0), dtype=ITYPE) # unused
+            source_matrix = None
     else:
-        if min_only:
-            predecessor_matrix = np.empty(0, dtype=ITYPE)
-            source_matrix = np.empty(0, dtype=ITYPE) # unused
-        else:
-            predecessor_matrix = np.empty((len(indices), 0), dtype=ITYPE)
-            source_matrix = np.empty((len(indices), 0), dtype=ITYPE) # unused
+        predecessor_matrix = None
+        source_matrix = None
 
     if unweighted:
         csr_data = np.ones(csgraph.data.shape)
@@ -599,22 +595,25 @@ def dijkstra(csgraph, directed=True, indices=None,
         csr_data = csgraph.data
 
     if directed:
-        # for null transposed CSR
-        dummy_double_array = np.empty(0, dtype=DTYPE)
-        dummy_int_array = np.empty(0, dtype=ITYPE)
         if min_only:
             _dijkstra(indices,
                       csr_data, csgraph.indices, csgraph.indptr,
-                      dummy_double_array, dummy_int_array, dummy_int_array,
-                      dist_matrix, predecessor_matrix, source_matrix,
-                      limitf)
+                      dist_matrix, predecessor_matrix,
+                      csrT_weights=None,
+                      csrT_indices=None,
+                      csrT_indptr=None,
+                      sources=source_matrix,
+                      limit=limitf)
         else:
             _dijkstra_multi_separate(
                       indices,
                       csr_data, csgraph.indices, csgraph.indptr,
-                      dummy_double_array, dummy_int_array, dummy_int_array,
-                      dist_matrix, predecessor_matrix, source_matrix,
-                      limitf)
+                      dist_matrix, predecessor_matrix,
+                      csrT_weights=None,
+                      csrT_indices=None,
+                      csrT_indptr=None,
+                      sources=source_matrix,
+                      limit=limitf)
     else:
         csgraphT = csgraph.T.tocsr()
         if unweighted:
@@ -624,16 +623,17 @@ def dijkstra(csgraph, directed=True, indices=None,
         if min_only:
             _dijkstra(indices,
                                  csr_data, csgraph.indices, csgraph.indptr,
+                                 dist_matrix, predecessor_matrix,
                                  csrT_data, csgraphT.indices, csgraphT.indptr,
-                                 dist_matrix, predecessor_matrix, source_matrix,
+                                 source_matrix,
                                  limitf)
         else:
             _dijkstra_multi_separate(
                                  indices,
                                  csr_data, csgraph.indices, csgraph.indptr,
+                                 dist_matrix, predecessor_matrix,
                                  csrT_data, csgraphT.indices, csgraphT.indptr,
-                                 dist_matrix, predecessor_matrix, source_matrix,
-                                 limitf)
+                                 source_matrix, limitf)
 
     if return_predecessors:
         if min_only:
@@ -652,7 +652,7 @@ ctypedef pair[DTYPE_t, uint_t] dist_index_pair_t
 ctypedef priority_queue[dist_index_pair_t] dijkstra_queue_t
 
 @cython.boundscheck(False)
-cdef _dijkstra_scan_heap(dijkstra_queue_t &heap,
+cdef void _dijkstra_scan_heap(dijkstra_queue_t &heap,
                          dist_index_pair_t v,
                          const double[:] csr_weights,
                          const int[:] csr_indices,
@@ -687,25 +687,25 @@ cdef _dijkstra_scan_heap(dijkstra_queue_t &heap,
 
 
 @cython.boundscheck(False)
-cdef int _dijkstra(
+def _dijkstra(
             const int[:] source_indices,
             const double[:] csr_weights,
             const int[:] csr_indices,
             const int[:] csr_indptr,
-            const double[:] csrT_weights,
-            const int[:] csrT_indices,
-            const int[:] csrT_indptr,
             double[:] dist_matrix,
-            int[:] pred,
-            int[:] sources,
-            DTYPE_t limit) except -1:
+            int[:] pred=None,
+            const double[:] csrT_weights=None,
+            const int[:] csrT_indices=None,
+            const int[:] csrT_indptr=None,
+            int[:] sources=None,
+            DTYPE_t limit=np.inf) -> int:
     cdef:
         unsigned int Nind = source_indices.shape[0]
         unsigned int N = dist_matrix.shape[0]
         unsigned int i, j_source
-        int return_pred = (pred.size > 0)
-        int return_sources = (sources.size > 0)
-        int directed = (csrT_weights.size == 0)
+        int return_pred = (pred is not None)
+        int return_sources = (sources is not None)
+        int directed = (csrT_weights is None)
         dijkstra_queue_t heap # pairs of {-distance, vertex index} will be pushed
                               # to treat it as a min-heap instead of max-heap
         dist_index_pair_t v
@@ -719,8 +719,12 @@ cdef int _dijkstra(
 
     if return_pred:
         assert pred.size == N
+    else:
+        pred=np.empty(0, dtype=ITYPE)
     if return_sources:
         assert sources.size == N
+    else:
+        sources = np.empty(0, dtype=ITYPE)
 
     while heap.size():
         v = heap.top()
@@ -735,7 +739,8 @@ cdef int _dijkstra(
         if dist_matrix[v.second] < v.first :
             continue
 
-        _dijkstra_scan_heap(heap, v, csr_weights, csr_indices, csr_indptr,
+        _dijkstra_scan_heap(
+            heap, v, csr_weights, csr_indices, csr_indptr,
                             dist_matrix, pred, return_pred,
                             sources, return_sources, limit)
         if not directed:
@@ -746,33 +751,37 @@ cdef int _dijkstra(
     return 0
 
 @cython.boundscheck(False)
-cdef int _dijkstra_multi_separate(
+def _dijkstra_multi_separate(
             const int[:] source_indices,
             const double[:] csr_weights,
             const int[:] csr_indices,
             const int[:] csr_indptr,
-            const double[:] csrT_weights,
-            const int[:] csrT_indices,
-            const int[:] csrT_indptr,
             double[:, :] dist_matrix,
-            int[:, :] pred,
-            int[:, :] sources,
-            DTYPE_t limit) except -1:
+            int[:, :] pred=None,
+            const double[:] csrT_weights=None,
+            const int[:] csrT_indices=None,
+            const int[:] csrT_indptr=None,
+            int[:, :] sources=None,
+            DTYPE_t limit=np.inf) -> None:
     cdef:
         unsigned int Nind = source_indices.shape[0]
         unsigned int i
-        int source_list[1]
+        int[:] source_list = np.empty(1, dtype=ITYPE)
+        int[:] _sources
+        int[:] _pred
 
     assert dist_matrix.shape[0] == Nind
-    assert pred.shape[0] == Nind
-    assert sources.shape[0] == Nind
+    assert pred is None or pred.shape[0] == Nind
+    assert sources is None or sources.shape[0] == Nind
     for i in range(Nind):
         source_list[0] = source_indices[i]
+        _sources = sources[i] if sources is not None else None
+        _pred = pred[i] if pred is not None else None
         _dijkstra(source_list,
                   csr_weights, csr_indices, csr_indptr,
+                  dist_matrix[i], _pred,
                   csrT_weights, csrT_indices, csrT_indptr,
-                  dist_matrix[i], pred[i], sources[i], limit)
-
+                  _sources, limit)
 
 
 def bellman_ford(csgraph, directed=True, indices=None,
@@ -1141,7 +1150,7 @@ def johnson(csgraph, directed=True, indices=None,
         predecessor_matrix = np.empty((len(indices), N), dtype=ITYPE)
         predecessor_matrix.fill(NULL_IDX)
     else:
-        predecessor_matrix = np.empty((len(indices), 0), dtype=ITYPE)
+        predecessor_matrix = None
 
     #------------------------------
     # initialize distance array
@@ -1167,16 +1176,11 @@ def johnson(csgraph, directed=True, indices=None,
     _johnson_add_weights(csr_data, csgraph.indices,
                          csgraph.indptr, dist_array)
 
-    dummy_source_matrix = np.empty((len(indices), 0), dtype=ITYPE)
     if directed:
-        # for null transposed CSR
-        dummy_double_array = np.empty(0, dtype=DTYPE)
-        dummy_int_array = np.empty(0, dtype=ITYPE)
         _dijkstra_multi_separate(
             indices,
             csr_data, csgraph.indices, csgraph.indptr,
-            dummy_double_array, dummy_int_array, dummy_int_array,
-            dist_matrix, predecessor_matrix, dummy_source_matrix, np.inf)
+            dist_matrix, predecessor_matrix)
     else:
         csgraphT = csr_matrix((csr_data, csgraph.indices, csgraph.indptr),
                                csgraph.shape).T.tocsr()
@@ -1185,9 +1189,8 @@ def johnson(csgraph, directed=True, indices=None,
         _dijkstra_multi_separate(
             indices,
             csr_data, csgraph.indices, csgraph.indptr,
-            csgraphT.data, csgraphT.indices, csgraphT.indptr,
-            dist_matrix, predecessor_matrix, dummy_source_matrix,
-            np.inf)
+            dist_matrix, predecessor_matrix,
+            csgraphT.data, csgraphT.indices, csgraphT.indptr)
 
     # ------------------------------
     # correct the distance matrix for the bellman-ford weights
@@ -1431,7 +1434,7 @@ def yen(
 
     if directed:
         csgraphT = csgraph
-        csrT_data = np.empty(0, dtype=DTYPE)
+        csrT_data = None
     else:
         csgraphT = csgraph.T.tocsr()
         if unweighted:
@@ -1445,8 +1448,8 @@ def yen(
     _yen(
         source, sink,
         csr_data, csgraph.indices, csgraph.indptr,
-        csrT_data, csgraphT.indices, csgraphT.indptr,
         dist_array, predecessor_matrix,
+        csrT_data, csgraphT.indices, csgraphT.indptr,
     )
     if has_negative_weights:
         dist_array += johnson_dist_array[sink] - johnson_dist_array[source]
@@ -1465,20 +1468,19 @@ cdef void _yen(
     const int source,
     const int sink,
     const double[:] original_weights, const int[:] csr_indices, const int[:] csr_indptr,
-    const double[:] originalT_weights, const int[:] csrT_indices, const int[:] csrT_indptr,
     double[:] shortest_distances,
     int[:, :] shortest_paths_predecessors,
+    const double[:] originalT_weights, const int[:] csrT_indices, const int[:] csrT_indptr,
 ):
     cdef:
         int K = shortest_paths_predecessors.shape[0] # Number of paths to find
         int N = shortest_paths_predecessors.shape[1] # Number of nodes in graph
-        bint directed = originalT_weights.size == 0
+        bint directed = originalT_weights is None
 
         # Dijkstra's operands and results arrays
         int[:] indice_node_arr = np.array([source], dtype=ITYPE)
         int[:] predecessor_matrix = np.full((N), NULL_IDX, dtype=ITYPE)
         double[:] dist_matrix = np.full((N), np.inf, dtype=DTYPE)
-        int[:] dummy_source_matrix = np.empty((0), dtype=ITYPE) # unused
     dist_matrix[source] = 0
 
     # ---------------------------------------------------
@@ -1486,9 +1488,8 @@ cdef void _yen(
     _dijkstra(
         indice_node_arr,
         original_weights, csr_indices, csr_indptr,
+        dist_matrix, predecessor_matrix,
         originalT_weights, csrT_indices, csrT_indptr,
-        dist_matrix, predecessor_matrix, dummy_source_matrix,
-        INFINITY,
     )
 
     shortest_distances[0] = dist_matrix[sink]
@@ -1511,7 +1512,7 @@ cdef void _yen(
 
     # Avoid copying a size 0 memory view
     if directed:
-        csrT_weights = np.empty(0, dtype=DTYPE)
+        csrT_weights = None
     else:
         csrT_weights = originalT_weights.copy()
 
@@ -1614,9 +1615,8 @@ cdef void _yen(
             _dijkstra(
                 indice_node_arr,
                 csr_weights, csr_indices, csr_indptr,
+                dist_matrix, predecessor_matrix,
                 csrT_weights, csrT_indices, csrT_indptr,
-                dist_matrix, predecessor_matrix, dummy_source_matrix,
-                INFINITY,
             )
 
             # Compute the total distance of the found path
